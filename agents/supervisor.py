@@ -1,39 +1,53 @@
+from mcp_client.client import MCPClient
 from models.schemas import TaskRequest, TaskResponse
 from tracing.logger import logger
 
-from agents.worker_a import WorkerA
-from agents.worker_b import WorkerB
+from agents.summary_agent import SummaryAgent
+from agents.keyword_agent import KeywordAgent
 
 
 class Supervisor:
     """
-    Routes tasks to the correct worker.
+    Supervisor Agent responsible for routing tasks
+    to specialized agents.
     """
 
     def __init__(self):
 
-        self.worker_a = WorkerA()
-        self.worker_b = WorkerB()
+        self.client = MCPClient()
 
-    def execute(self, request: TaskRequest) -> TaskResponse:
+        # Initialize agents once with the shared client
+        self.agents = {
+            "summarize": SummaryAgent(self.client),
+            "keywords": KeywordAgent(self.client),
+        }
+
+    async def execute(self, request: TaskRequest) -> TaskResponse:
 
         logger.info(f"Supervisor received task: {request.task}")
 
-        if request.task.lower() == "summarize":
+        try:
 
-            logger.info("Routing to Worker A")
+            # Open one shared MCP connection
+            await self.client.connect()
 
-            return self.worker_a.execute(request)
+            agent = self.agents.get(request.task.lower())
 
-        elif request.task.lower() == "keywords":
+            if agent is None:
 
-            logger.info("Routing to Worker B")
+                logger.error(f"No agent registered for '{request.task}'")
 
-            return self.worker_b.execute(request)
+                return TaskResponse(
+                    status="error",
+                    result=f"No agent found for task '{request.task}'"
+                )
 
-        logger.error("Unknown task")
+            logger.info(f"Routing to {agent.__class__.__name__}")
 
-        return TaskResponse(
-            status="error",
-            result="Unknown task."
-        )
+            response = await agent.execute(request)
+
+            return response
+
+        finally:  
+              await self.client.close()
+              
